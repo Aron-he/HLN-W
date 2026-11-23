@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      verify_write:
+        description: Test Qiniu write access when the signed release is already mirrored
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,4 +40,5 @@ jobs:
           QINIU_MIRROR_FEED: ${{ vars.QINIU_MIRROR_FEED }}
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
           QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_VERIFY_WRITE: ${{ inputs.verify_write && '1' || '0' }}
         run: node scripts/publish-manager-qiniu.mjs "$RUNNER_TEMP/hln-mirror" ed25519-public.pem

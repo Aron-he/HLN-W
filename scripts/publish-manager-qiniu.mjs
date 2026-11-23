@@ -97,7 +97,8 @@ async function publish(stagedRoot, publicKeyPath, config) {
       throw new Error('The mirror already serves a newer or conflicting release.')
     }
   }
-  if (prior?.equals(manifest)) {
+  const alreadyCurrent = prior?.equals(manifest) === true
+  if (alreadyCurrent && !config.verifyWrite) {
     console.log(`Qiniu mirror already current: ${release.version}`)
     return
   }
@@ -107,18 +108,19 @@ async function publish(stagedRoot, publicKeyPath, config) {
   await verifyPublicArchive(channel, release)
   await upload(config, feedPath, 'latest.json', 'application/json', false)
   if (!(await readPublicManifest(channel))?.equals(manifest)) throw new Error('Mirror manifest is not current. Check the CDN cache settings.')
-  console.log(`Qiniu mirror published: ${release.version}`)
+  if (alreadyCurrent) console.log(`Qiniu mirror write verified: ${release.version}`)
+  else console.log(`Qiniu mirror published: ${release.version}`)
 }
 
 const [,, root, keyFile] = process.argv
 const { QINIU_BUCKET: bucket, QINIU_REGION: region, QINIU_MIRROR_FEED: feed,
-  QINIU_ACCESS_KEY: accessKey, QINIU_SECRET_KEY: secretKey } = process.env
+  QINIU_ACCESS_KEY: accessKey, QINIU_SECRET_KEY: secretKey, QINIU_VERIFY_WRITE: verifyWrite } = process.env
 const origin = Object.hasOwn(uploadOrigins, region) ? uploadOrigins[region] : undefined
 if (!root || !keyFile || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket ?? '') || !origin || !feed || !accessKey || !secretKey) {
   console.error('Set the Qiniu region, bucket, HTTPS mirror feed, upload credentials and staged release paths.')
   process.exitCode = 1
 } else {
-  await publish(root, keyFile, { bucket, feed, accessKey, secretKey, upload: origin }).catch(error => {
+  await publish(root, keyFile, { bucket, feed, accessKey, secretKey, upload: origin, verifyWrite: verifyWrite === '1' }).catch(error => {
     console.error(error.message)
     process.exitCode = 1
   })
