@@ -104,8 +104,13 @@ async function publish(stagedRoot, publicKeyPath, config) {
   }
   const archive = join(stagedRoot, 'stable', release.file)
   if (await fileDigest(archive) !== release.sha256) throw new Error('Staged archive failed SHA-256 verification.')
-  await upload(config, archive, release.file, 'application/zip', true)
+  if (!alreadyCurrent) {
+    console.log(`Uploading Qiniu archive: ${release.version}`)
+    await upload(config, archive, release.file, 'application/zip', true)
+  }
+  console.log(`Verifying public Qiniu archive: ${release.version}`)
   await verifyPublicArchive(channel, release)
+  console.log(`Writing signed Qiniu manifest: ${release.version}`)
   await upload(config, feedPath, 'latest.json', 'application/json', false)
   if (!(await readPublicManifest(channel))?.equals(manifest)) throw new Error('Mirror manifest is not current. Check the CDN cache settings.')
   if (alreadyCurrent) console.log(`Qiniu mirror write verified: ${release.version}`)
