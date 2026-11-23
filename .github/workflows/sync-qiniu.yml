@@ -1,0 +1,38 @@
+name: Sync Windows updates to Qiniu
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hln-w-stable-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download and validate the current GitHub release
+        run: node scripts/sync-manager-mirror.mjs "$RUNNER_TEMP/hln-mirror" ed25519-public.pem
+      - name: Publish ZIP and signed feed to Qiniu
+        if: vars.QINIU_MIRROR_ENABLED == '1'
+        env:
+          QINIU_BUCKET: ${{ vars.QINIU_BUCKET }}
+          QINIU_REGION: ${{ vars.QINIU_REGION }}
+          QINIU_MIRROR_FEED: ${{ vars.QINIU_MIRROR_FEED }}
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+        run: node scripts/publish-manager-qiniu.mjs "$RUNNER_TEMP/hln-mirror" ed25519-public.pem
