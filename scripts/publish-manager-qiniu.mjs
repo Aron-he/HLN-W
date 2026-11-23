@@ -1,15 +1,15 @@
+import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { openAsBlob } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import updateFeed from '../electron/app-update-feed.cjs'
 
 const { compareVersions, fileDigest, maxFeedBytes, readRelease, releaseAssetUrl, releaseChannel } = updateFeed
 const uploadOrigins = {
-  z0: 'https://up-z0.qiniup.com',
-  z1: 'https://up-z1.qiniup.com',
-  z2: 'https://up-z2.qiniup.com',
+  z0: 'https://upload.qiniup.com',
+  z1: 'https://upload-z1.qiniup.com',
+  z2: 'https://upload-z2.qiniup.com',
   'cn-east-2': 'https://up-cn-east-2.qiniup.com',
 }
 
@@ -27,15 +27,24 @@ function uploadToken(config, key, insertOnly) {
 
 async function upload(config, source, file, mimeType, insertOnly) {
   const key = 'stable/' + file
-  const body = new FormData()
-  body.set('key', key)
-  body.set('token', uploadToken(config, key, insertOnly))
-  body.set('file', await openAsBlob(source, { type: mimeType }), file)
-  const response = await fetch(config.upload, {
-    method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(15 * 60_000),
+  const status = await new Promise((resolve, reject) => {
+    const curl = spawn(process.platform === 'win32' ? 'curl.exe' : 'curl', [
+      '-q', '--silent', '--show-error', '--connect-timeout', '25', '--max-time', '1200',
+      '--speed-time', '90', '--speed-limit', '131072',
+      '--output', process.platform === 'win32' ? 'NUL' : '/dev/null', '--write-out', '%{http_code}',
+      '--form-string', `key=${key}`, '--form', 'token=<-',
+      '--form', `file=@./${file};type=${mimeType}`, config.upload,
+    ], { cwd: dirname(source), stdio: ['pipe', 'pipe', 'inherit'] })
+    let code = ''
+    curl.stdout.setEncoding('ascii').on('data', value => { code += value })
+    curl.stdin.on('error', () => {})
+    curl.on('error', reject)
+    curl.on('close', exit => {
+      if (exit === 0) resolve(Number(code))
+      else reject(new Error(`Qiniu upload of ${file} ended with curl exit ${exit}.`))
+    })
+    curl.stdin.end(uploadToken(config, key, insertOnly))
   })
-  const status = response.status
-  await response.body?.cancel()
   if (status !== 200 && !(insertOnly && status === 614)) throw new Error(`Qiniu upload returned HTTP ${status}.`)
 }
 
