@@ -1,0 +1,37 @@
+name: Renew the Qiniu update domain certificate
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Certificate operation
+        type: choice
+        default: check
+        options: [check, scheduled, challenge, rotate]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hln-w-qiniu-tls
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check or renew the update domain certificate
+        shell: pwsh
+        env:
+          HLNW_TLS_MODE: ${{ inputs.mode || (vars.HLNW_TLS_ENABLED == '1' && 'scheduled' || 'check') }}
+          QINIU_TLS_ACCESS_KEY: ${{ secrets.QINIU_TLS_ACCESS_KEY }}
+          QINIU_TLS_SECRET_KEY: ${{ secrets.QINIU_TLS_SECRET_KEY }}
+          HLNW_ACME_ACCOUNT_KEY: ${{ secrets.HLNW_ACME_ACCOUNT_KEY }}
+        run: ./scripts/renew-manager-tls.ps1 -Mode $env:HLNW_TLS_MODE
