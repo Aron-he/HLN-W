@@ -73,6 +73,36 @@ function Get-VerifiedHttpsSettings($DomainInfo, [string]$ExpectedDomain) {
     return $https
 }
 
+function Test-QiniuCertificateUploadEndpoint([string]$Server, [string]$Scheme) {
+    $path = '/sslcert'
+    $json = @{ name = 'HLN-W upload validation'; common_name = $domain; ca = 'invalid certificate'; pri = 'invalid key' } |
+        ConvertTo-Json -Compress
+    $data = $path + [char]10
+    $headers = @{}
+    if ($Scheme -eq 'Qiniu') {
+        $date = [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'")
+        $data = @("POST $path", "Host: $Server", 'Content-Type: application/json', "X-Qiniu-Date: $date", '', $json) -join [char]10
+        $headers['X-Qiniu-Date'] = $date
+    }
+    $headers.Authorization = "$Scheme $($env:QINIU_TLS_ACCESS_KEY):$(Get-QiniuSignature $data)"
+    $args = @{
+        Uri = "https://$Server$path"; Method = 'Post'; Headers = $headers; ContentType = 'application/json'
+        Body = [Text.Encoding]::UTF8.GetBytes($json); MaximumRedirection = 0; SkipHttpErrorCheck = $true; TimeoutSec = 15
+    }
+    $result = Invoke-WebRequest @args
+    $parsed = try { $result.Content | ConvertFrom-Json } catch { $null }
+    $code = if ($parsed.code -match '^\d{3,9}$') { $parsed.code } else { 'none' }
+    $category = switch -Regex (($parsed.error, $parsed.message) -join ' ') {
+        'bad token|invalid.{0,12}token|incorrect.{0,12}token' { 'token rejected'; break }
+        'unauthori[sz]ed|authorization' { 'authorization rejected'; break }
+        'permission|access denied|无权|权限' { 'permission refused'; break }
+        '证书|certificate|invalid key|私钥' { 'certificate payload validation'; break }
+        default { 'unspecified' }
+    }
+    $reqid = $result.Headers['X-Reqid'] | Select-Object -First 1
+    if ($reqid -notmatch '^[A-Za-z0-9_-]{6,40}$') { $reqid = 'none' }
+    Write-Output "$Server / $Scheme => HTTP $($result.StatusCode), code $code, $category, request $reqid"
+}
 $current = Get-PublicCertificate
 try {
     $expires = $current.NotAfter.ToUniversalTime()
@@ -87,6 +117,12 @@ try {
     $domainPath = "/domain/$domain"
     $original = Invoke-QiniuApi Get $domainPath
     $https = Get-VerifiedHttpsSettings $original $domain
+    if ($Mode -eq 'challenge') {
+        Test-QiniuCertificateUploadEndpoint 'fusion.qiniuapi.com' 'QBox'
+        Test-QiniuCertificateUploadEndpoint 'api.qiniu.com' 'QBox'
+        Test-QiniuCertificateUploadEndpoint 'api.qiniu.com' 'Qiniu'
+        return
+    }
     if ($Mode -eq 'challenge') {
         $token = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
         $proof = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
@@ -154,3 +190,4 @@ try {
         }
     }
 } finally { $current.Dispose() }
+

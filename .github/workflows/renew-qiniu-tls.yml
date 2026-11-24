@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   renew:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/codex/qiniu-certificate-preflight' && inputs.mode == 'challenge'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -39,5 +39,4 @@ jobs:
         env:
           QINIU_TLS_ACCESS_KEY: ${{ secrets.QINIU_TLS_ACCESS_KEY }}
           QINIU_TLS_SECRET_KEY: ${{ secrets.QINIU_TLS_SECRET_KEY }}
-          HLNW_ACME_ACCOUNT_KEY: ${{ secrets.HLNW_ACME_ACCOUNT_KEY }}
         run: ./scripts/renew-manager-tls.ps1 -Mode $env:HLNW_TLS_MODE
