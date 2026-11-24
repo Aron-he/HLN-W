@@ -21,6 +21,7 @@ function Get-PublicCertificate {
 }
 
 function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload) {
+    $Method = $Method.ToUpperInvariant()
     $json = if ($Payload) { $Payload | ConvertTo-Json -Compress -Depth 6 }
     if ($Path -eq '/sslcert') {
         $endpoint = 'fusion.qiniuapi.com'
@@ -43,7 +44,11 @@ function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload) {
         $request.Body = [Text.Encoding]::UTF8.GetBytes($json)
     }
     $reply = Invoke-WebRequest @request
-    if ($reply.StatusCode -ne 200) { throw "Qiniu API $Method $Path returned HTTP $($reply.StatusCode)." }
+    if ($reply.StatusCode -ne 200) {
+        $code = try { ($reply.Content | ConvertFrom-Json).code } catch { $null }
+        $detail = if ($code -match '^\d{3,9}$') { " (Qiniu code $code)" }
+        throw "Qiniu API $Method $Path returned HTTP $($reply.StatusCode)$detail."
+    }
     return $reply.Content | ConvertFrom-Json
 }
 
