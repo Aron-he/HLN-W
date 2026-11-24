@@ -52,6 +52,27 @@ function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload) {
     return $reply.Content | ConvertFrom-Json
 }
 
+function Get-VerifiedHttpsSettings($DomainInfo, [string]$ExpectedDomain) {
+    $https = $DomainInfo.https
+    $tls = $https.tlsVersions
+    $validTls = ($tls -is [string] -and ![string]::IsNullOrWhiteSpace($tls)) -or
+        ($tls -is [array] -and $tls.Count -gt 0 -and
+            @($tls | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -eq 0)
+    $invalid = @(
+        if ($DomainInfo.name -ne $ExpectedDomain) { 'name' }
+        if ($DomainInfo.protocol -ne 'https') { 'protocol' }
+        if ($DomainInfo.operatingState -ne 'success') { 'operatingState' }
+        if ($https.certId -notmatch '^[a-f0-9]{24}$') { 'https.certId' }
+        if ($https.forceHttps -isnot [bool]) { 'https.forceHttps' }
+        if ($https.http2Enable -isnot [bool]) { 'https.http2Enable' }
+        if (!$validTls) { 'https.tlsVersions' }
+    )
+    if ($invalid.Count) {
+        throw "The CDN HTTPS settings could not be verified (fields: $($invalid -join ', '))."
+    }
+    return $https
+}
+
 $current = Get-PublicCertificate
 try {
     $expires = $current.NotAfter.ToUniversalTime()
@@ -65,12 +86,7 @@ try {
 
     $domainPath = "/domain/$domain"
     $original = Invoke-QiniuApi Get $domainPath
-    $https = $original.https
-    if ($original.name -ne $domain -or $original.protocol -ne 'https' -or $original.operatingState -ne 'success' -or
-        $https.certId -notmatch '^[a-f0-9]{24}$' -or $https.forceHttps -isnot [bool] -or
-        $https.http2Enable -isnot [bool] -or $https.tlsVersions -isnot [string] -or !$https.tlsVersions) {
-        throw 'The current CDN HTTPS settings could not be verified.'
-    }
+    $https = Get-VerifiedHttpsSettings $original $domain
     if ($Mode -eq 'challenge') {
         $token = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
         $proof = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
