@@ -19,7 +19,9 @@ concurrency:
 
 jobs:
   sync:
-    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release.prerelease == endsWith(github.event.release.tag_name, '-test'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -30,15 +32,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Select the publication channel
+        id: channel
+        env:
+          PRERELEASE_TAG: ${{ github.event.release.prerelease && github.event.release.tag_name || '' }}
+          STABLE_MIRROR_FEED: ${{ vars.QINIU_MIRROR_FEED }}
+        run: |
+          if [[ -z "$PRERELEASE_TAG" ]]; then
+            if [[ -n "$STABLE_MIRROR_FEED" && "$STABLE_MIRROR_FEED" != https://*/stable/latest.json ]]; then
+              echo 'The stable mirror must use /stable/latest.json.' >&2
+              exit 1
+            fi
+            echo 'public_key=ed25519-public.pem' >> "$GITHUB_OUTPUT"
+            echo "mirror_feed=$STABLE_MIRROR_FEED" >> "$GITHUB_OUTPUT"
+          elif [[ "$PRERELEASE_TAG" =~ ^v(0|[1-9][0-9]{0,7})\.(0|[1-9][0-9]{0,7})\.(0|[1-9][0-9]{0,7})-test$ ]]; then
+            echo 'public_key=ed25519-test-public.pem' >> "$GITHUB_OUTPUT"
+            echo "source_feed=https://github.com/$GITHUB_REPOSITORY/releases/download/$PRERELEASE_TAG/latest.json" >> "$GITHUB_OUTPUT"
+            echo "mirror_feed=https://updates.wuyouxiang.top/test/$PRERELEASE_TAG/latest.json" >> "$GITHUB_OUTPUT"
+          else
+            echo 'Invalid mirror test release tag.' >&2
+            exit 1
+          fi
       - name: Download and validate the current GitHub release
-        run: node scripts/sync-manager-mirror.mjs "$RUNNER_TEMP/hln-mirror" ed25519-public.pem
+        env:
+          UPDATE_PUBLIC_KEY: ${{ steps.channel.outputs.public_key }}
+          SOURCE_FEED: ${{ steps.channel.outputs.source_feed }}
+        run: node scripts/sync-manager-mirror.mjs "$RUNNER_TEMP/hln-mirror" "$UPDATE_PUBLIC_KEY" "$SOURCE_FEED"
       - name: Publish ZIP and signed feed to Qiniu
         if: vars.QINIU_MIRROR_ENABLED == '1'
         env:
           QINIU_BUCKET: ${{ vars.QINIU_BUCKET }}
           QINIU_REGION: ${{ vars.QINIU_REGION }}
-          QINIU_MIRROR_FEED: ${{ vars.QINIU_MIRROR_FEED }}
+          QINIU_MIRROR_FEED: ${{ steps.channel.outputs.mirror_feed }}
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
           QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
           QINIU_VERIFY_WRITE: ${{ inputs.verify_write && '1' || '0' }}
-        run: node scripts/publish-manager-qiniu.mjs "$RUNNER_TEMP/hln-mirror" ed25519-public.pem
+          UPDATE_PUBLIC_KEY: ${{ steps.channel.outputs.public_key }}
+        run: node scripts/publish-manager-qiniu.mjs "$RUNNER_TEMP/hln-mirror" "$UPDATE_PUBLIC_KEY"

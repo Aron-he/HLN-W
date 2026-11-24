@@ -25,8 +25,8 @@ function uploadToken(config, key, insertOnly) {
   return `${config.accessKey}:${signature}:${policy}`
 }
 
-async function upload(config, source, file, mimeType, insertOnly) {
-  const key = 'stable/' + file
+async function upload(config, prefix, source, file, mimeType, insertOnly) {
+  const key = `${prefix}/${file}`
   const status = await new Promise((resolve, reject) => {
     const curl = spawn(process.platform === 'win32' ? 'curl.exe' : 'curl', [
       '-q', '--silent', '--show-error', '--connect-timeout', '25', '--max-time', '1200',
@@ -98,6 +98,10 @@ async function publish(stagedRoot, publicKeyPath, config) {
   const feedPath = join(stagedRoot, 'stable', 'latest.json')
   const manifest = await readFile(feedPath)
   const release = readRelease(JSON.parse(manifest), channel)
+  const prefix = channel.url.pathname === '/stable/latest.json' ? 'stable' : `test/v${release.version}-test`
+  if (channel.url.pathname !== `/${prefix}/latest.json`) {
+    throw new Error('The mirror path does not match the signed release channel and version.')
+  }
   const prior = await readPublicManifest(channel)
   if (prior) {
     const lastRelease = readRelease(JSON.parse(prior), channel)
@@ -115,12 +119,12 @@ async function publish(stagedRoot, publicKeyPath, config) {
   if (await fileDigest(archive) !== release.sha256) throw new Error('Staged archive failed SHA-256 verification.')
   if (!alreadyCurrent) {
     console.log(`Uploading Qiniu archive: ${release.version}`)
-    await upload(config, archive, release.file, 'application/zip', true)
+    await upload(config, prefix, archive, release.file, 'application/zip', true)
   }
   console.log(`Verifying public Qiniu archive: ${release.version}`)
   await verifyPublicArchive(channel, release)
   console.log(`Writing signed Qiniu manifest: ${release.version}`)
-  await upload(config, feedPath, 'latest.json', 'application/json', false)
+  await upload(config, prefix, feedPath, 'latest.json', 'application/json', false)
   if (!(await readPublicManifest(channel))?.equals(manifest)) throw new Error('Mirror manifest is not current. Check the CDN cache settings.')
   if (alreadyCurrent) console.log(`Qiniu mirror write verified: ${release.version}`)
   else console.log(`Qiniu mirror published: ${release.version}`)

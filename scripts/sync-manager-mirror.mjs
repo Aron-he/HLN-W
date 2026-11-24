@@ -122,12 +122,12 @@ async function syncMirror(directory, publicKeyPath, feed) {
   }
 }
 
-const [, , destination, publicKeyPath, feed = githubFeed] = process.argv
+const [, , destination, publicKeyPath, feed] = process.argv
 if (!destination || !publicKeyPath) {
   console.error('Usage: node scripts/sync-manager-mirror.mjs <mirror-root> <public-key.pem> [feed-url]')
   process.exitCode = 1
 } else {
-  await syncMirror(resolve(destination), resolve(publicKeyPath), feed).catch(error => {
+  await syncMirror(resolve(destination), resolve(publicKeyPath), feed || githubFeed).catch(error => {
     console.error(error.message)
     process.exitCode = 1
   })
