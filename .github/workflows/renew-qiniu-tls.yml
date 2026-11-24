@@ -23,14 +23,20 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      HLNW_TLS_MODE: ${{ inputs.mode || (vars.HLNW_TLS_ENABLED == '1' && 'scheduled' || 'check') }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Check or renew the update domain certificate
+      - name: Check the public certificate expiry
+        if: env.HLNW_TLS_MODE == 'check'
+        shell: pwsh
+        run: ./scripts/renew-manager-tls.ps1 -Mode check
+      - name: Validate or renew the update domain certificate
+        if: env.HLNW_TLS_MODE != 'check'
         shell: pwsh
         env:
-          HLNW_TLS_MODE: ${{ inputs.mode || (vars.HLNW_TLS_ENABLED == '1' && 'scheduled' || 'check') }}
           QINIU_TLS_ACCESS_KEY: ${{ secrets.QINIU_TLS_ACCESS_KEY }}
           QINIU_TLS_SECRET_KEY: ${{ secrets.QINIU_TLS_SECRET_KEY }}
           HLNW_ACME_ACCOUNT_KEY: ${{ secrets.HLNW_ACME_ACCOUNT_KEY }}
