@@ -20,16 +20,15 @@ function Get-PublicCertificate {
     } finally { $client.Dispose() }
 }
 
-function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload) {
+function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload, [switch]$CertificatePreflight) {
     $Method = $Method.ToUpperInvariant()
     $json = if ($Payload) { $Payload | ConvertTo-Json -Compress -Depth 6 }
+    $endpoint = 'api.qiniu.com'
     if ($Path -eq '/sslcert') {
-        $endpoint = 'fusion.qiniuapi.com'
         $scheme = 'QBox'
         $data = "$Path`n"
         $headers = @{}
     } else {
-        $endpoint = 'api.qiniu.com'
         $scheme = 'Qiniu'
         $date = [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'")
         $data = "$Method $Path`nHost: $endpoint`n"
@@ -46,9 +45,12 @@ function Invoke-QiniuApi([string]$Method, [string]$Path, [hashtable]$Payload) {
     $reply = Invoke-WebRequest @request
     if ($reply.StatusCode -ne 200) {
         $code = try { ($reply.Content | ConvertFrom-Json).code } catch { $null }
+        # These Qiniu codes identify rejection of the deliberately invalid PEM.
+        if ($CertificatePreflight -and $reply.StatusCode -eq 400 -and $code -in 400323, 400324, 400325, 404906) { return }
         $detail = if ($code -match '^\d{3,9}$') { " (Qiniu code $code)" }
         throw "Qiniu API $Method $Path returned HTTP $($reply.StatusCode)$detail."
     }
+    if ($CertificatePreflight) { throw 'Qiniu unexpectedly accepted the invalid certificate probe.' }
     return $reply.Content | ConvertFrom-Json
 }
 
@@ -87,6 +89,13 @@ try {
     $domainPath = "/domain/$domain"
     $original = Invoke-QiniuApi Get $domainPath
     $https = Get-VerifiedHttpsSettings $original $domain
+    Invoke-QiniuApi Post '/sslcert' @{
+        name = "HLN-W $domain preflight"
+        common_name = $domain
+        pri = 'invalid key'
+        ca = 'invalid certificate'
+    } -CertificatePreflight
+    Write-Output 'The Qiniu certificate endpoint reached certificate validation.'
     if ($Mode -eq 'challenge') {
         $token = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
         $proof = ConvertTo-QiniuBase64 ([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
@@ -118,21 +127,20 @@ try {
             }
             $uploaded = Invoke-QiniuApi Post '/sslcert' @{
                 name = "HLN-W $domain $($candidate.NotAfter.ToString('yyyy-MM-dd'))"
+                common_name = $domain
                 pri = [IO.File]::ReadAllText($cert.KeyFile)
                 ca = [IO.File]::ReadAllText($cert.FullChainFile)
             }
             if ($uploaded.certID -notmatch '^[a-f0-9]{24}$') { throw 'Qiniu did not return a certificate identifier.' }
+            Write-Output 'Qiniu accepted the renewed certificate.'
             $latestConfig = Invoke-QiniuApi Get $domainPath
             if ($latestConfig.modifyAt -ne $original.modifyAt -or $latestConfig.https.certId -ne $https.certId) {
                 throw 'The CDN configuration changed during issuance. Rerun after checking the new configuration.'
             }
-            $updated = Invoke-QiniuApi Put "$domainPath/httpsconf" @{
-                certId = $uploaded.certID
-                forceHttps = $https.forceHttps
-                http2Enable = $https.http2Enable
-                tlsVersions = $https.tlsVersions
-            }
+            # Qiniu keeps omitted HTTPS settings when updating the certificate.
+            $updated = Invoke-QiniuApi Put "$domainPath/httpsconf" @{ certId = $uploaded.certID }
             if ($updated.code -ne 200) { throw "Qiniu rejected the HTTPS update (code $($updated.code))." }
+            Write-Output 'Qiniu accepted the HTTPS configuration change. Waiting for the public certificate.'
             for ($attempt = 0; $attempt -lt 30; $attempt++) {
                 try {
                     $active = Get-PublicCertificate
