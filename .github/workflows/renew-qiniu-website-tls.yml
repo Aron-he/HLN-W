@@ -40,4 +40,4 @@ jobs:
           QINIU_TLS_ACCESS_KEY: ${{ secrets.QINIU_TLS_ACCESS_KEY }}
           QINIU_TLS_SECRET_KEY: ${{ secrets.QINIU_TLS_SECRET_KEY }}
           HLNW_ACME_ACCOUNT_KEY: ${{ secrets.HLNW_ACME_ACCOUNT_KEY }}
-        run: ./scripts/renew-manager-tls.ps1 -Target website -Mode "$HLNW_TLS_MODE"
+        run: ./scripts/renew-manager-tls.ps1 -Target website -Mode $env:HLNW_TLS_MODE
