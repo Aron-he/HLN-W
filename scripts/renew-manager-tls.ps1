@@ -1,18 +1,48 @@
 [CmdletBinding()]
-param([ValidateSet('check', 'scheduled', 'challenge', 'rotate')] [string]$Mode = 'scheduled')
+param(
+    [ValidateSet('check', 'scheduled', 'challenge', 'rotate')] [string]$Mode = 'scheduled',
+    [ValidateSet('updates', 'website')] [string]$Target = 'updates'
+)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$domain = 'updates.wuyouxiang.top'
+$domain = if ($Target -eq 'website') { 'wyx-static.wuyouxiang.top' } else { 'updates.wuyouxiang.top' }
 $renewBefore = 30
 $env:POSHACME_PLUGINS = Join-Path $PSScriptRoot 'acme-plugins'
 . (Join-Path $env:POSHACME_PLUGINS 'QiniuManagerUpdates.ps1')
 
-function Get-PublicCertificate {
+function Get-PublicCertificate([switch]$AllowExpired) {
     $client = [Net.Sockets.TcpClient]::new()
     try {
         $null = $client.ConnectAsync($domain, 443).WaitAsync([TimeSpan]::FromSeconds(15)).GetAwaiter().GetResult()
-        $stream = [Net.Security.SslStream]::new($client.GetStream())
+        $stream = if ($AllowExpired) {
+            if (!('QiniuExpiredCertificate' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+public static class QiniuExpiredCertificate
+{
+    public static RemoteCertificateValidationCallback Validator { get; } = Validate;
+
+    private static bool Validate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors)
+    {
+        if (errors == SslPolicyErrors.None) return true;
+        if (errors != SslPolicyErrors.RemoteCertificateChainErrors || cert == null || chain == null) return false;
+        using var leaf = new X509Certificate2(cert);
+        if (leaf.NotAfter.ToUniversalTime() > DateTime.UtcNow || chain.ChainStatus.Length == 0) return false;
+        foreach (var status in chain.ChainStatus)
+        {
+            if (status.Status != X509ChainStatusFlags.NotTimeValid) return false;
+        }
+        return true;
+    }
+}
+'@
+            }
+            [Net.Security.SslStream]::new($client.GetStream(), $false, [QiniuExpiredCertificate]::Validator)
+        } else { [Net.Security.SslStream]::new($client.GetStream()) }
         try {
             $null = $stream.AuthenticateAsClientAsync($domain).WaitAsync([TimeSpan]::FromSeconds(15)).GetAwaiter().GetResult()
             return [Security.Cryptography.X509Certificates.X509Certificate2]::new($stream.RemoteCertificate)
@@ -75,10 +105,12 @@ function Get-VerifiedHttpsSettings($DomainInfo, [string]$ExpectedDomain) {
     return $https
 }
 
-$current = Get-PublicCertificate
+# Read the existing expiry even when the website certificate has passed it.
+# The deployment verification below always requires a trusted certificate.
+$current = Get-PublicCertificate -AllowExpired:($Target -eq 'website')
 try {
     $expires = $current.NotAfter.ToUniversalTime()
-    Write-Output "Current public certificate expires $($expires.ToString('u'))."
+    Write-Output "The public certificate for $domain expires $($expires.ToString('u'))."
     if ($Mode -eq 'check') {
         if ($expires -le [DateTime]::UtcNow.AddDays($renewBefore)) { throw 'Certificate renewal is due.' }
         return

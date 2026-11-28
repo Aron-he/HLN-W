@@ -8,7 +8,11 @@ function Add-HttpChallenge {
         [Parameter(ValueFromRemainingArguments)] $ExtraParams
     )
 
-    if ($Domain -cne 'updates.wuyouxiang.top' -or $Token -cnotmatch '^[A-Za-z0-9_-]{20,128}$' -or
+    $bucket = switch -CaseSensitive ($Domain) {
+        'updates.wuyouxiang.top' { 'hln-w-updates-wuyouxiang' }
+        'wyx-static.wuyouxiang.top' { 'kyl-wyx' }
+    }
+    if (!$bucket -or $Token -cnotmatch '^[A-Za-z0-9_-]{20,128}$' -or
         $Body -cnotmatch ('^' + [regex]::Escape($Token) + '\.[A-Za-z0-9_-]{43}$')) {
         throw 'Unexpected HTTP-01 challenge.'
     }
@@ -24,7 +28,7 @@ function Add-HttpChallenge {
         $start.RedirectStandardError = $true
         foreach ($argument in @('s3api', 'put-object', '--endpoint-url', 'https://s3.cn-south-1.qiniucs.com',
             '--region', 'cn-south-1', '--no-cli-pager', '--no-cli-auto-prompt', '--cli-connect-timeout', '15',
-            '--cli-read-timeout', '25', '--bucket', 'hln-w-updates-wuyouxiang', '--key', $object,
+            '--cli-read-timeout', '25', '--bucket', $bucket, '--key', $object,
             '--body', $challengeFile.FullName, '--content-type', 'text/plain', '--cache-control', 'no-store')) {
             $start.ArgumentList.Add($argument)
         }
